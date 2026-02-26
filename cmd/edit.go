@@ -12,12 +12,15 @@ import (
 var editCmd = &cobra.Command{
 	Use:   "edit",
 	Short: "Edit an existing transaction",
+	// LAB 4: Uses pointer-based EditTransactionFields to mutate
+	// the transaction through a pointer instead of manual field copies.
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id, _ := cmd.Flags().GetInt("id")
 		if id <= 0 {
 			return fmt.Errorf("id is required")
 		}
 
+		// GetTransaction returns *models.Transaction (pointer from DB query)
 		existing, err := store.GetTransaction(id)
 		if err != nil {
 			return err
@@ -30,28 +33,22 @@ var editCmd = &cobra.Command{
 		date, _ := cmd.Flags().GetString("date")
 		notes, _ := cmd.Flags().GetString("notes")
 
-		if txType != "" {
-			existing.Type = models.TransactionType(txType)
-		}
-		if amount > 0 {
-			existing.Amount = models.Rupees(amount)
-		}
-		if category != "" {
-			existing.Category = models.Category(category)
-		}
-		if desc != "" {
-			existing.Description = desc
-		}
-		if date != "" {
-			existing.Date = date
-		} else if existing.Date == "" {
-			existing.Date = time.Now().Format("2006-01-02")
-		}
-		if notes != "" {
-			existing.Notes = notes
+		if date == "" && existing.Date == "" {
+			date = time.Now().Format("2006-01-02")
 		}
 
-		if err := store.UpdateTransaction(*existing); err != nil {
+		// LAB 4: Pass pointer to mutate transaction in-place
+		models.EditTransactionFields(
+			existing, // *Transaction — pointer, mutations affect caller
+			models.TransactionType(txType),
+			amount,
+			models.Category(category),
+			desc,
+			date,
+			notes,
+		)
+
+		if err := store.UpdateTransaction(existing); err != nil {
 			return err
 		}
 		fmt.Println("Transaction updated.")

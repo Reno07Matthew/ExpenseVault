@@ -536,17 +536,22 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 		cat = services.NewCategorizer().AutoCategorize(desc)
 	}
 
-	tx := models.Transaction{
-		Type:        models.TransactionType(txType),
-		Amount:      models.Rupees(amount),
-		Category:    cat,
-		Description: desc,
-		Date:        date,
-		Notes:       notes,
+	// LAB 4: Factory function returns *Transaction (pointer).
+	tx := models.NewTransaction(
+		models.TransactionType(txType),
+		amount,
+		cat,
+		desc,
+		date,
+	)
+	// LAB 4: Pointer receiver — mutates the transaction in-place.
+	if notes != "" {
+		tx.SetNotes(notes)
 	}
 
 	store := m.store
 	return m, func() tea.Msg {
+		// LAB 4: Dereference pointer to pass value to AddTransaction.
 		id, err := store.AddTransaction(tx)
 		if err != nil {
 			return errMsg{err}
@@ -773,9 +778,11 @@ func (m Model) renderDashboard() string {
 		for i := 0; i < count; i++ {
 			tx := m.transactions[i]
 			style := IncomeStyle
-			if tx.Type == models.Expense {
+			// LAB 4: Value receiver IsExpense() — read-only check on copy.
+			if tx.IsExpense() {
 				style = ExpenseStyle
 			}
+			// LAB 4: Value receiver Summary() for compact display.
 			sb.WriteString(fmt.Sprintf("  %s  %s\n",
 				style.Render(fmt.Sprintf("%-8s %s", tx.Amount, tx.Type)),
 				MutedStyle.Render(fmt.Sprintf("%-15s %s", tx.Category, tx.Date)),
@@ -817,7 +824,8 @@ func (m Model) renderTransactions() string {
 		}
 
 		symbol := "💰"
-		if tx.Type == models.Expense {
+		// LAB 4: Value receiver IsExpense() — read-only check.
+		if tx.IsExpense() {
 			symbol = "💸"
 		}
 

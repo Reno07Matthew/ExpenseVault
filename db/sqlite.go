@@ -3,24 +3,33 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 
 	"expenseVault/models"
 
 	_ "modernc.org/sqlite"
 )
 
+// ──────────────────────────────────────────────────────────
+// UNIT 4 — Pointer-based struct & Factory
+// ──────────────────────────────────────────────────────────
+
 // Store manages all database operations.
+// UNIT 2: Struct — groups related fields.
 type Store struct {
-	db *sql.DB
+	db *sql.DB // UNIT 4: Pointer field — *sql.DB
 }
 
 // NewStore opens/creates the SQLite database and initializes tables.
+// UNIT 4: Factory function returning *Store (pointer).
+// UNIT 3: Error handling — wrapping with models.DatabaseError.
 func NewStore(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, &models.DatabaseError{Operation: "open", Err: err}
 	}
 
+	// UNIT 1: Short declaration operator — store := &Store{...}
 	store := &Store{db: db}
 	if err := store.createTables(); err != nil {
 		_ = db.Close()
@@ -31,11 +40,13 @@ func NewStore(dbPath string) (*Store, error) {
 }
 
 // Close closes the database connection.
+// UNIT 4: Pointer receiver — method on *Store.
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
 func (s *Store) createTables() error {
+	// UNIT 2: Slice — composite literal of SQL strings.
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS transactions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,8 +71,10 @@ func (s *Store) createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type)`,
 	}
 
+	// UNIT 2: for-range over slice.
 	for _, q := range queries {
 		if _, err := s.db.Exec(q); err != nil {
+			// UNIT 3: Errors with info — wrapping with context.
 			return &models.DatabaseError{Operation: "create_tables", Err: err}
 		}
 	}
@@ -69,7 +82,9 @@ func (s *Store) createTables() error {
 }
 
 // AddTransaction inserts a new transaction.
-func (s *Store) AddTransaction(t models.Transaction) (int64, error) {
+// UNIT 4: Accepts *Transaction (pointer) to avoid struct copy.
+func (s *Store) AddTransaction(t *models.Transaction) (int64, error) {
+	// UNIT 3: Error handling — checking errors.
 	if err := models.ValidateTransaction(t); err != nil {
 		return 0, err
 	}
@@ -86,6 +101,7 @@ func (s *Store) AddTransaction(t models.Transaction) (int64, error) {
 }
 
 // GetTransaction retrieves a transaction by ID.
+// UNIT 4: Returns *Transaction (pointer).
 func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
 	row := s.db.QueryRow(
 		`SELECT id, type, amount, category, description, date, notes, created_at, updated_at
@@ -93,6 +109,7 @@ func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
 		id,
 	)
 
+	// UNIT 1: var keyword — t starts with zero values.
 	var t models.Transaction
 	var amount float64
 	if err := row.Scan(&t.ID, &t.Type, &amount, &t.Category, &t.Description, &t.Date, &t.Notes, &t.CreatedAt, &t.UpdatedAt); err != nil {
@@ -104,17 +121,22 @@ func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
 	if t.Category == "" {
 		return nil, &models.ValidationError{Field: "category", Msg: "missing"}
 	}
+	// UNIT 1: Conversion — models.Rupees(amount) converts float64 to custom type.
 	t.Amount = models.Rupees(amount)
 	return &t, nil
 }
 
 // ListTransactions lists filtered transactions.
+// UNIT 2: Slice — dynamic queries with append.
 func (s *Store) ListTransactions(txType, category, startDate, endDate string, limit int) ([]models.Transaction, error) {
 	query := `SELECT id, type, amount, category, description, date, notes, created_at, updated_at FROM transactions WHERE 1=1`
+	// UNIT 2: Slice — using []any{} (empty composite literal).
 	args := []any{}
 
+	// UNIT 1: Control flow — conditionals building dynamic query.
 	if txType != "" {
 		query += " AND type = ?"
+		// UNIT 2: append — grows the slice.
 		args = append(args, txType)
 	}
 	if category != "" {
@@ -134,10 +156,12 @@ func (s *Store) ListTransactions(txType, category, startDate, endDate string, li
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
+	// UNIT 3: Unfurling a slice — args... spreads the slice into variadic Query().
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, &models.DatabaseError{Operation: "list", Err: err}
 	}
+	// UNIT 3: Defer — ensures rows.Close() runs when function returns.
 	defer rows.Close()
 
 	var txs []models.Transaction
@@ -154,7 +178,8 @@ func (s *Store) ListTransactions(txType, category, startDate, endDate string, li
 }
 
 // UpdateTransaction updates an existing transaction.
-func (s *Store) UpdateTransaction(t models.Transaction) error {
+// UNIT 4: Accepts *Transaction (pointer) to avoid struct copy.
+func (s *Store) UpdateTransaction(t *models.Transaction) error {
 	if err := models.ValidateTransaction(t); err != nil {
 		return err
 	}
@@ -183,12 +208,26 @@ func (s *Store) GetAllTransactions() ([]models.Transaction, error) {
 	return s.ListTransactions("", "", "", "", 0)
 }
 
+// ──────────────────────────────────────────────────────────
+// UNIT 3 — Panic / Recover in BulkInsert
+// ──────────────────────────────────────────────────────────
+
 // BulkInsert inserts multiple transactions.
-func (s *Store) BulkInsert(transactions []models.Transaction) (int, error) {
-	count := 0
-	for _, t := range transactions {
-		if _, err := s.AddTransaction(t); err != nil {
-			return count, err
+// UNIT 3: Defer + Recover — recovers from panics during bulk insert.
+// UNIT 4: Passes *Transaction (pointer) to AddTransaction.
+func (s *Store) BulkInsert(transactions []models.Transaction) (count int, err error) {
+	// UNIT 3: Defer + Recover — safety net for unexpected panics.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC RECOVERED] BulkInsert: %v", r)
+			err = fmt.Errorf("bulk insert panicked after %d records: %v", count, r)
+		}
+	}()
+
+	for i := range transactions {
+		// UNIT 4: Pass by pointer — &transactions[i] avoids copy.
+		if _, insertErr := s.AddTransaction(&transactions[i]); insertErr != nil {
+			return count, insertErr
 		}
 		count++
 	}
@@ -208,6 +247,7 @@ func (s *Store) CreateUser(username, passwordHash string) (int64, error) {
 }
 
 // GetUserByUsername retrieves a user by username.
+// UNIT 4: Returns *models.User (pointer).
 func (s *Store) GetUserByUsername(username string) (*models.User, error) {
 	row := s.db.QueryRow(
 		"SELECT id, username, password_hash, created_at, COALESCE(last_login, created_at) FROM users WHERE username = ?",

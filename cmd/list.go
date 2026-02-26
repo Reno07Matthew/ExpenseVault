@@ -26,7 +26,8 @@ var listCmd = &cobra.Command{
 		}
 
 		for _, t := range txs {
-			fmt.Printf("%d | %s | %s | %s | %s | %s\n", t.ID, t.Type, t.Amount, t.Category, t.Description, t.Date)
+			// LAB 4: Uses value-receiver String() method on Transaction.
+			fmt.Println(t.String())
 		}
 		return nil
 	},

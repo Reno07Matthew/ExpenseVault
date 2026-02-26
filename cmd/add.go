@@ -31,13 +31,17 @@ var addCmd = &cobra.Command{
 			cat = services.NewCategorizer().AutoCategorize(desc)
 		}
 
-		tx := models.Transaction{
-			Type:        models.TransactionType(txType),
-			Amount:      models.Rupees(amount),
-			Category:    cat,
-			Description: desc,
-			Date:        date,
-			Notes:       notes,
+		// LAB 4: Factory function returns *Transaction (pointer).
+		tx := models.NewTransaction(
+			models.TransactionType(txType),
+			amount,
+			cat,
+			desc,
+			date,
+		)
+		// LAB 4: Pointer receiver — mutates the transaction in-place.
+		if notes != "" {
+			tx.SetNotes(notes)
 		}
 
 		id, err := store.AddTransaction(tx)

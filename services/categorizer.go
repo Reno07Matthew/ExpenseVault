@@ -9,10 +9,14 @@ import (
 // Categorizer auto-categorizes transactions.
 type Categorizer struct{}
 
+// NewCategorizer is a factory function that returns a *Categorizer (pointer).
+// LAB 4: Factory function returning pointer.
 func NewCategorizer() *Categorizer {
 	return &Categorizer{}
 }
 
+// AutoCategorize uses a pointer receiver to match the method set convention.
+// LAB 4: Pointer receiver on Categorizer.
 func (c *Categorizer) AutoCategorize(desc string) models.Category {
 	d := strings.ToLower(desc)
 
