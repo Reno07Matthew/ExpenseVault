@@ -2,8 +2,10 @@ package services
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"expenseVault/models"
 )
@@ -114,15 +116,43 @@ func CombineReports(transactions []models.Transaction, reporters ...Reporter) st
 
 // RunAllReports is a convenience function demonstrating unfurling.
 // UNIT 3: Unfurling a slice — allReporters... spreads the slice into variadic args.
+// RunAllReports runs all reporters in parallel using goroutines.
+// UNIT 5: Concurrency — WaitGroup & Channels.
 func RunAllReports(transactions []models.Transaction) string {
-	// UNIT 2: Slice — composite literal.
 	allReporters := []Reporter{
 		&MonthlyReporter{},
 		&CategoryReporter{},
 		&YearlyReporter{},
 	}
-	// UNIT 3: Unfurling — the ... operator spreads allReporters into variadic parameter.
-	return CombineReports(transactions, allReporters...)
+
+	type result struct {
+		index  int
+		output string
+	}
+	resChan := make(chan result, len(allReporters))
+	var wg sync.WaitGroup
+
+	for i, r := range allReporters {
+		wg.Add(1)
+		go func(idx int, rep Reporter) {
+			defer wg.Done()
+			resChan <- result{idx, rep.Generate(transactions)}
+		}(i, r)
+	}
+
+	// Wait in a separate goroutine so we can close the channel.
+	go func() {
+		wg.Wait()
+		close(resChan)
+	}()
+
+	// Collect results and sort by index.
+	results := make([]string, len(allReporters))
+	for r := range resChan {
+		results[r.index] = r.output
+	}
+
+	return strings.Join(results, "---\n")
 }
 
 // ──────────────────────────────────────────────────────────
@@ -173,17 +203,57 @@ func ChainFilters(filters ...TransactionFilter) TransactionFilter {
 	}
 }
 
-// ApplyFilter applies a callback filter to transactions.
-// UNIT 3: Callback — accepts a function as parameter.
+// ApplyFilter applies a callback filter to transactions in parallel.
+// UNIT 5: Concurrency — Chunked processing with goroutines.
 func ApplyFilter(txs []models.Transaction, filter TransactionFilter) []models.Transaction {
-	result := make([]models.Transaction, 0, len(txs))
-	for _, tx := range txs {
-		// UNIT 3: Callback — calling the passed-in function.
-		if filter(tx) {
-			result = append(result, tx)
+	if len(txs) < 100 { // Only parallelize if significant enough
+		result := make([]models.Transaction, 0, len(txs))
+		for _, tx := range txs {
+			if filter(tx) {
+				result = append(result, tx)
+			}
 		}
+		return result
 	}
-	return result
+
+	numCPU := runtime.NumCPU()
+	if numCPU <= 0 {
+		numCPU = 1
+	}
+	
+	chunkSize := (len(txs) + numCPU - 1) / numCPU
+	resChan := make(chan []models.Transaction, numCPU)
+	var wg sync.WaitGroup
+
+	for i := 0; i < len(txs); i += chunkSize {
+		end := i + chunkSize
+		if end > len(txs) {
+			end = len(txs)
+		}
+
+		wg.Add(1)
+		go func(chunk []models.Transaction) {
+			defer wg.Done()
+			filtered := make([]models.Transaction, 0, len(chunk))
+			for _, tx := range chunk {
+				if filter(tx) {
+					filtered = append(filtered, tx)
+				}
+			}
+			resChan <- filtered
+		}(txs[i:end])
+	}
+
+	go func() {
+		wg.Wait()
+		close(resChan)
+	}()
+
+	var finalResult []models.Transaction
+	for filtered := range resChan {
+		finalResult = append(finalResult, filtered...)
+	}
+	return finalResult
 }
 
 // ──────────────────────────────────────────────────────────

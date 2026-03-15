@@ -19,7 +19,12 @@ var exportCmd = &cobra.Command{
 			return fmt.Errorf("output path is required")
 		}
 
-		txs, err := store.GetAllTransactions()
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
+		txs, err := store.GetAllTransactions(userID)
 		if err != nil {
 			return err
 		}

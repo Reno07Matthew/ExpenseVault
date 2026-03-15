@@ -31,8 +31,14 @@ var addCmd = &cobra.Command{
 			cat = services.NewCategorizer().AutoCategorize(desc)
 		}
 
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
 		// LAB 4: Factory function returns *Transaction (pointer).
 		tx := models.NewTransaction(
+			userID,
 			models.TransactionType(txType),
 			amount,
 			cat,

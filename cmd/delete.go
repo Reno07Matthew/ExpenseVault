@@ -14,7 +14,21 @@ var deleteCmd = &cobra.Command{
 		if id <= 0 {
 			return fmt.Errorf("id is required")
 		}
-		if err := store.DeleteTransaction(id); err != nil {
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
+		existing, err := store.GetTransaction(id)
+		if err != nil {
+			return err
+		}
+
+		if existing.UserID != userID {
+			return fmt.Errorf("access denied")
+		}
+
+		if err := store.DeleteTransaction(id, userID); err != nil {
 			return err
 		}
 		fmt.Println("Transaction deleted.")

@@ -9,6 +9,7 @@ import (
 // Transaction represents a financial transaction.
 type Transaction struct {
 	ID          int64           `json:"id"`
+	UserID      int64           `json:"user_id"`
 	Type        TransactionType `json:"type"`
 	Amount      Rupees          `json:"amount"`
 	Category    Category        `json:"category"`
@@ -98,9 +99,10 @@ func (t *Transaction) ApplyDiscount(pct float64) {
 
 // NewTransaction creates and returns a pointer to a new Transaction.
 // Returning a pointer avoids copying and lets callers mutate directly.
-func NewTransaction(txType TransactionType, amount float64, category Category, desc, date string) *Transaction {
+func NewTransaction(userID int64, txType TransactionType, amount float64, category Category, desc, date string) *Transaction {
 	now := time.Now()
 	return &Transaction{
+		UserID:      userID,
 		Type:        txType,
 		Amount:      Rupees(amount),
 		Category:    category,
@@ -215,4 +217,35 @@ type MonthlySummary struct {
 	Balance      Rupees
 	ByCategory   map[Category]Rupees
 	Transactions []Transaction
+}
+
+// Budget represents a monthly spending target for a category.
+type Budget struct {
+	ID       int64    `json:"id"`
+	UserID   int64    `json:"user_id"`
+	Category Category `json:"category"`
+	Amount   Rupees   `json:"amount"`
+	Month    string   `json:"month"` // YYYY-MM
+}
+
+// CategoryBreakdown holds spending info for a single category.
+type CategoryBreakdown struct {
+	Category Category
+	Amount   Rupees
+	Target   Rupees // Budgeted amount
+	Percent  float64
+}
+
+// DashboardData holds all processed metrics for the dashboard view.
+type DashboardData struct {
+	MonthlyIncome   Rupees
+	TotalExpenses   Rupees
+	Savings         Rupees
+	ExpenseRatio    float64
+	SavingsRatio    float64
+	Breakdown       []CategoryBreakdown
+	SmartInsight    string
+	DailyTip        string
+	HasMajorIssues  bool
+	UsingBudget     bool // True if calculations are based on budget rather than income
 }

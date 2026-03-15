@@ -20,7 +20,12 @@ var backupCmd = &cobra.Command{
 			output = filepath.Join(home, "expensevault_backup.json")
 		}
 
-		txs, err := store.GetAllTransactions()
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
+		txs, err := store.GetAllTransactions(userID)
 		if err != nil {
 			return err
 		}

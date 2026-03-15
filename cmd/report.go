@@ -15,7 +15,12 @@ var reportCmd = &cobra.Command{
 		reportType, _ := cmd.Flags().GetString("type")
 		all, _ := cmd.Flags().GetBool("all")
 
-		txs, err := store.GetAllTransactions()
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
+		txs, err := store.GetAllTransactions(userID)
 		if err != nil {
 			return err
 		}
@@ -25,12 +30,8 @@ var reportCmd = &cobra.Command{
 		}
 
 		if all {
-			fmt.Println("Monthly Report:")
-			fmt.Println((&services.MonthlyReporter{}).Generate(txs))
-			fmt.Println("Category Report:")
-			fmt.Println((&services.CategoryReporter{}).Generate(txs))
-			fmt.Println("Yearly Report:")
-			fmt.Println((&services.YearlyReporter{}).Generate(txs))
+			fmt.Println("Generating all reports (parallel)...")
+			fmt.Println(services.RunAllReports(txs))
 			return nil
 		}
 

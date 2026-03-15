@@ -16,7 +16,12 @@ var listCmd = &cobra.Command{
 		endDate, _ := cmd.Flags().GetString("end")
 		limit, _ := cmd.Flags().GetInt("limit")
 
-		txs, err := store.ListTransactions(txType, category, startDate, endDate, limit)
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
+		txs, err := store.ListTransactions(userID, txType, category, startDate, endDate, limit)
 		if err != nil {
 			return err
 		}

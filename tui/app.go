@@ -64,6 +64,8 @@ type Model struct {
 	inputs      []textinput.Model
 	focusIndex  int
 	formMessage string
+
+	dashData models.DashboardData
 }
 
 func NewModel(store *db.Store, config *utils.Config) Model {
@@ -156,18 +158,33 @@ func NewModel(store *db.Store, config *utils.Config) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.loadTransactions
+	return nil
 }
 
 func (m Model) loadTransactions() tea.Msg {
-	txs, err := m.store.GetAllTransactions()
+	if m.currentUser == nil {
+		return txsLoadedMsg{[]models.Transaction{}, models.DashboardData{}}
+	}
+	txs, err := m.store.GetAllTransactions(m.currentUser.ID)
 	if err != nil {
 		return errMsg{err}
 	}
-	return txsLoadedMsg{txs}
+	
+	month := time.Now().Format("2006-01")
+	budgets, err := m.store.GetBudgets(m.currentUser.ID, month)
+	if err != nil {
+		// If budgets fail, we still want to show transactions
+		budgets = make(map[models.Category]models.Rupees)
+	}
+
+	dashData := services.CalculateDashboardData(txs, budgets)
+	return txsLoadedMsg{txs, dashData}
 }
 
-type txsLoadedMsg struct{ transactions []models.Transaction }
+type txsLoadedMsg struct {
+	transactions []models.Transaction
+	dashData     models.DashboardData
+}
 type errMsg struct{ err error }
 type txAddedMsg struct{ id int64 }
 type signupSuccessMsg struct{ username string }
@@ -188,6 +205,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case txsLoadedMsg:
 		m.transactions = msg.transactions
+		m.dashData = msg.dashData
 		m.message = ""
 		return m, nil
 	case txAddedMsg:
@@ -538,6 +556,7 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 
 	// LAB 4: Factory function returns *Transaction (pointer).
 	tx := models.NewTransaction(
+		m.currentUser.ID,
 		models.TransactionType(txType),
 		amount,
 		cat,
@@ -738,15 +757,66 @@ func (m Model) fieldView(index int, label string, hint string) string {
 func (m Model) renderDashboard() string {
 	var sb strings.Builder
 
-	summary := models.QuickSummary(m.transactions)
-
 	// Summary boxes
-	incomeBox := IncomeBoxStyle.Render(fmt.Sprintf("💰 Income\n%s", summary.Income))
-	expenseBox := ExpenseBoxStyle.Render(fmt.Sprintf("💸 Expenses\n%s", summary.Expenses))
-	balanceBox := BalanceBoxStyle.Render(fmt.Sprintf("📊 Balance\n%s", summary.Balance))
+	label := "💰 Income"
+	if m.dashData.UsingBudget {
+		label = "🎯 Budgeted"
+	}
+	incomeBox := IncomeBoxStyle.Render(fmt.Sprintf("%s\n%s", label, m.dashData.MonthlyIncome))
+	expenseBox := ExpenseBoxStyle.Render(fmt.Sprintf("💸 Expenses\n%s", m.dashData.TotalExpenses))
+	balanceBox := BalanceBoxStyle.Render(fmt.Sprintf("📊 Savings\n%s", m.dashData.Savings))
 
 	sb.WriteString("  " + lipgloss.JoinHorizontal(lipgloss.Top, incomeBox, "  ", expenseBox, "  ", balanceBox))
 	sb.WriteString("\n\n")
+
+	// Progress Bars
+	title := "  📊 Budget Overview"
+	if m.dashData.UsingBudget {
+		title = "  📊 Spending relative to Budget"
+	}
+	sb.WriteString(HeaderStyle.Render(title))
+	sb.WriteString("\n\n")
+	
+	if !m.dashData.UsingBudget {
+		sb.WriteString(m.renderProgressBar("Income  ", 1.0, 30) + " " + IncomeStyle.Render("100%"))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(m.renderProgressBar("Expenses", m.dashData.ExpenseRatio, 30) + " " + ExpenseStyle.Render(fmt.Sprintf("%.0f%%", m.dashData.ExpenseRatio*100)))
+	sb.WriteString("\n")
+	
+	if !m.dashData.UsingBudget {
+		sb.WriteString(m.renderProgressBar("Savings ", m.dashData.SavingsRatio, 30) + " " + BalanceBoxStyle.Copy().Border(lipgloss.HiddenBorder()).Padding(0).Render(fmt.Sprintf("%.0f%%", m.dashData.SavingsRatio*100)))
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+
+	// Category Breakdown
+	if len(m.dashData.Breakdown) > 0 {
+		sb.WriteString(HeaderStyle.Render("  📂 Category Targets"))
+		sb.WriteString("\n\n")
+		for _, b := range m.dashData.Breakdown {
+			targetInfo := ""
+			if b.Target > 0 {
+				targetInfo = fmt.Sprintf(" / %s", b.Target)
+			}
+			sb.WriteString(fmt.Sprintf("  %-15s %s%s (%2.0f%%)\n", b.Category, b.Amount, targetInfo, b.Percent*100))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Smart Insights & Tips
+	if m.dashData.SmartInsight != "" {
+		sb.WriteString(HeaderStyle.Render("  💡 Budget Insight"))
+		sb.WriteString("\n\n")
+		sb.WriteString(BoxStyle.Width(m.width - 10).Render(m.dashData.SmartInsight))
+		sb.WriteString("\n")
+	} else if m.dashData.DailyTip != "" {
+		sb.WriteString(HeaderStyle.Render("  💡 Daily Budget Tip"))
+		sb.WriteString("\n\n")
+		sb.WriteString(BoxStyle.Width(m.width - 10).Render(m.dashData.DailyTip))
+		sb.WriteString("\n")
+	}
 
 	sb.WriteString(HeaderStyle.Render("  📌 Menu"))
 	sb.WriteString("\n\n")
@@ -761,36 +831,38 @@ func (m Model) renderDashboard() string {
 		sb.WriteString("\n")
 	}
 
-	// Recent transactions
-	sb.WriteString("\n")
-	sb.WriteString(HeaderStyle.Render("  📝 Recent Transactions"))
-	sb.WriteString("\n\n")
-
-	count := 5
-	if len(m.transactions) < count {
-		count = len(m.transactions)
-	}
-
-	if count == 0 {
-		sb.WriteString(MutedStyle.Render("  No transactions yet. Select '➕ Add Transaction' to get started!"))
-		sb.WriteString("\n")
-	} else {
-		for i := 0; i < count; i++ {
-			tx := m.transactions[i]
-			style := IncomeStyle
-			// LAB 4: Value receiver IsExpense() — read-only check on copy.
-			if tx.IsExpense() {
-				style = ExpenseStyle
-			}
-			// LAB 4: Value receiver Summary() for compact display.
-			sb.WriteString(fmt.Sprintf("  %s  %s\n",
-				style.Render(fmt.Sprintf("%-8s %s", tx.Amount, tx.Type)),
-				MutedStyle.Render(fmt.Sprintf("%-15s %s", tx.Category, tx.Date)),
-			))
-		}
-	}
-
 	return sb.String()
+}
+
+func (m Model) renderProgressBar(label string, percent float64, width int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 1 {
+		percent = 1
+	}
+
+	filledLength := int(percent * float64(width))
+	if filledLength > width {
+		filledLength = width
+	}
+	emptyLength := width - filledLength
+
+	filled := strings.Repeat("█", filledLength)
+	empty := strings.Repeat("░", emptyLength)
+
+	barStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	if label == "Expenses" {
+		if percent > 0.8 {
+			barStyle = barStyle.Foreground(lipgloss.Color("196"))
+		} else if percent > 0.5 {
+			barStyle = barStyle.Foreground(lipgloss.Color("214"))
+		}
+	} else if label == "Savings " {
+		barStyle = barStyle.Foreground(lipgloss.Color("42"))
+	}
+
+	return fmt.Sprintf("  %s %s", MutedStyle.Render(label), barStyle.Render(filled+empty))
 }
 
 func (m Model) renderTransactions() string {

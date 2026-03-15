@@ -29,9 +29,18 @@ var importCmd = &cobra.Command{
 			return fmt.Errorf("unknown format: %s", format)
 		}
 
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
 		txs, err := importer.Import(path)
 		if err != nil {
 			return err
+		}
+
+		for i := range txs {
+			txs[i].UserID = userID
 		}
 
 		count, err := store.BulkInsert(txs)

@@ -17,7 +17,8 @@ import (
 // Store manages all database operations.
 // UNIT 2: Struct — groups related fields.
 type Store struct {
-	db *sql.DB // UNIT 4: Pointer field — *sql.DB
+	db      *sql.DB
+	isMySQL bool
 }
 
 // NewStore opens/creates the SQLite database and initializes tables.
@@ -30,7 +31,7 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	// UNIT 1: Short declaration operator — store := &Store{...}
-	store := &Store{db: db}
+	store := &Store{db: db, isMySQL: false}
 	if err := store.createTables(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -46,10 +47,22 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) createTables() error {
-	// UNIT 2: Slice — composite literal of SQL strings.
+	// Enable foreign key support
+	if _, err := s.db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		return &models.DatabaseError{Operation: "enable_fks", Err: err}
+	}
+
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_login DATETIME
+		)`,
 		`CREATE TABLE IF NOT EXISTS transactions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER REFERENCES users(id),
 			type TEXT NOT NULL,
 			amount REAL NOT NULL,
 			category TEXT NOT NULL,
@@ -59,25 +72,50 @@ func (s *Store) createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`CREATE TABLE IF NOT EXISTS users (
+		`CREATE TABLE IF NOT EXISTS budgets (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT UNIQUE NOT NULL,
-			password_hash TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			last_login DATETIME
+			user_id INTEGER NOT NULL REFERENCES users(id),
+			category TEXT NOT NULL,
+			amount REAL NOT NULL,
+			month TEXT NOT NULL,
+			UNIQUE(user_id, category, month)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date)`,
 		`CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category)`,
 		`CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type)`,
+		`CREATE INDEX IF NOT EXISTS idx_budget_lookup ON budgets(user_id, month)`,
 	}
 
-	// UNIT 2: for-range over slice.
 	for _, q := range queries {
 		if _, err := s.db.Exec(q); err != nil {
-			// UNIT 3: Errors with info — wrapping with context.
 			return &models.DatabaseError{Operation: "create_tables", Err: err}
 		}
 	}
+
+	// Safe migration: Add user_id to transactions if missing
+	hasUserID := false
+	rows, err := s.db.Query("PRAGMA table_info(transactions)")
+	if err == nil {
+		for rows.Next() {
+			var cid int
+			var name, dtype string
+			var notnull, pk int
+			var dflt any
+			if err := rows.Scan(&cid, &name, &dtype, &notnull, &dflt, &pk); err == nil {
+				if name == "user_id" {
+					hasUserID = true
+					break
+				}
+			}
+		}
+		rows.Close()
+	}
+
+	if !hasUserID {
+		// Use DEFAULT 0 so it doesn't fail FK until a real user is needed
+		_, _ = s.db.Exec("ALTER TABLE transactions ADD COLUMN user_id INTEGER DEFAULT 0")
+	}
+
 	return nil
 }
 
@@ -90,9 +128,9 @@ func (s *Store) AddTransaction(t *models.Transaction) (int64, error) {
 	}
 
 	result, err := s.db.Exec(
-		`INSERT INTO transactions (type, amount, category, description, date, notes)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes,
+		`INSERT INTO transactions (user_id, type, amount, category, description, date, notes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.UserID, t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes,
 	)
 	if err != nil {
 		return 0, &models.DatabaseError{Operation: "insert", Err: err}
@@ -104,7 +142,7 @@ func (s *Store) AddTransaction(t *models.Transaction) (int64, error) {
 // UNIT 4: Returns *Transaction (pointer).
 func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
 	row := s.db.QueryRow(
-		`SELECT id, type, amount, category, description, date, notes, created_at, updated_at
+		`SELECT id, user_id, type, amount, category, description, date, notes, created_at, updated_at
 		 FROM transactions WHERE id = ?`,
 		id,
 	)
@@ -112,7 +150,7 @@ func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
 	// UNIT 1: var keyword — t starts with zero values.
 	var t models.Transaction
 	var amount float64
-	if err := row.Scan(&t.ID, &t.Type, &amount, &t.Category, &t.Description, &t.Date, &t.Notes, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.UserID, &t.Type, &amount, &t.Category, &t.Description, &t.Date, &t.Notes, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, &models.DatabaseError{Operation: "get", Err: err}
 	}
 	if t.Type != models.Income && t.Type != models.Expense {
@@ -126,12 +164,12 @@ func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
 	return &t, nil
 }
 
-// ListTransactions lists filtered transactions.
+// ListTransactions lists filtered transactions for a specific user.
 // UNIT 2: Slice — dynamic queries with append.
-func (s *Store) ListTransactions(txType, category, startDate, endDate string, limit int) ([]models.Transaction, error) {
-	query := `SELECT id, type, amount, category, description, date, notes, created_at, updated_at FROM transactions WHERE 1=1`
+func (s *Store) ListTransactions(userID int64, txType, category, startDate, endDate string, limit int) ([]models.Transaction, error) {
+	query := `SELECT id, user_id, type, amount, category, description, date, notes, created_at, updated_at FROM transactions WHERE user_id = ?`
 	// UNIT 2: Slice — using []any{} (empty composite literal).
-	args := []any{}
+	args := []any{userID}
 
 	// UNIT 1: Control flow — conditionals building dynamic query.
 	if txType != "" {
@@ -168,7 +206,7 @@ func (s *Store) ListTransactions(txType, category, startDate, endDate string, li
 	for rows.Next() {
 		var t models.Transaction
 		var amount float64
-		if err := rows.Scan(&t.ID, &t.Type, &amount, &t.Category, &t.Description, &t.Date, &t.Notes, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Type, &amount, &t.Category, &t.Description, &t.Date, &t.Notes, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, &models.DatabaseError{Operation: "scan", Err: err}
 		}
 		t.Amount = models.Rupees(amount)
@@ -185,8 +223,8 @@ func (s *Store) UpdateTransaction(t *models.Transaction) error {
 	}
 
 	_, err := s.db.Exec(
-		`UPDATE transactions SET type = ?, amount = ?, category = ?, description = ?, date = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes, t.ID,
+		`UPDATE transactions SET type = ?, amount = ?, category = ?, description = ?, date = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
+		t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes, t.ID, t.UserID,
 	)
 	if err != nil {
 		return &models.DatabaseError{Operation: "update", Err: err}
@@ -194,18 +232,18 @@ func (s *Store) UpdateTransaction(t *models.Transaction) error {
 	return nil
 }
 
-// DeleteTransaction deletes a transaction by ID.
-func (s *Store) DeleteTransaction(id int) error {
-	_, err := s.db.Exec("DELETE FROM transactions WHERE id = ?", id)
+// DeleteTransaction deletes a transaction by ID and user ID.
+func (s *Store) DeleteTransaction(id int, userID int64) error {
+	_, err := s.db.Exec("DELETE FROM transactions WHERE id = ? AND user_id = ?", id, userID)
 	if err != nil {
 		return &models.DatabaseError{Operation: "delete", Err: err}
 	}
 	return nil
 }
 
-// GetAllTransactions returns all transactions.
-func (s *Store) GetAllTransactions() ([]models.Transaction, error) {
-	return s.ListTransactions("", "", "", "", 0)
+// GetAllTransactions returns all transactions for a specific user.
+func (s *Store) GetAllTransactions(userID int64) ([]models.Transaction, error) {
+	return s.ListTransactions(userID, "", "", "", "", 0)
 }
 
 // ──────────────────────────────────────────────────────────
@@ -273,4 +311,43 @@ func (s *Store) UpdateLastLogin(userID int64) error {
 		return &models.DatabaseError{Operation: "update_last_login", Err: err}
 	}
 	return nil
+}
+// SetBudget creates or updates a budget for a user.
+func (s *Store) SetBudget(userID int64, category models.Category, amount models.Rupees, month string) error {
+	var query string
+	if s.isMySQL {
+		query = `INSERT INTO budgets (user_id, category, amount, month)
+				 VALUES (?, ?, ?, ?)
+				 ON DUPLICATE KEY UPDATE amount = VALUES(amount)`
+	} else {
+		query = `INSERT INTO budgets (user_id, category, amount, month)
+				 VALUES (?, ?, ?, ?)
+				 ON CONFLICT(user_id, category, month) DO UPDATE SET amount = excluded.amount`
+	}
+
+	_, err := s.db.Exec(query, userID, category, amount.ToFloat64(), month)
+	if err != nil {
+		return &models.DatabaseError{Operation: "set_budget", Err: err}
+	}
+	return nil
+}
+
+// GetBudgets retrieves all budgets for a specific user and month.
+func (s *Store) GetBudgets(userID int64, month string) (map[models.Category]models.Rupees, error) {
+	rows, err := s.db.Query("SELECT category, amount FROM budgets WHERE user_id = ? AND month = ?", userID, month)
+	if err != nil {
+		return nil, &models.DatabaseError{Operation: "get_budgets", Err: err}
+	}
+	defer rows.Close()
+
+	budgets := make(map[models.Category]models.Rupees)
+	for rows.Next() {
+		var cat string
+		var amt float64
+		if err := rows.Scan(&cat, &amt); err != nil {
+			return nil, err
+		}
+		budgets[models.Category(cat)] = models.Rupees(amt * 100)
+	}
+	return budgets, nil
 }

@@ -20,10 +20,19 @@ var editCmd = &cobra.Command{
 			return fmt.Errorf("id is required")
 		}
 
+		userID, err := getCurrentUserID()
+		if err != nil {
+			return err
+		}
+
 		// GetTransaction returns *models.Transaction (pointer from DB query)
 		existing, err := store.GetTransaction(id)
 		if err != nil {
 			return err
+		}
+
+		if existing.UserID != userID {
+			return fmt.Errorf("access denied")
 		}
 
 		txType, _ := cmd.Flags().GetString("type")
