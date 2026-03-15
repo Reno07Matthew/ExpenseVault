@@ -1,0 +1,8 @@
+.env
+expensevault
+expensevault.exe
+expenseVault
+test.exe
+__debug_bin.exe
+*.exe
+*.db
