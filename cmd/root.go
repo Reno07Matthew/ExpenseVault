@@ -73,4 +73,5 @@ func init() {
 	rootCmd.AddCommand(demoCmd)
 	rootCmd.AddCommand(signupCmd)
 	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(askCmd)
 }

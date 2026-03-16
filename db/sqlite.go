@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	"expenseVault/models"
 
@@ -350,4 +351,55 @@ func (s *Store) GetBudgets(userID int64, month string) (map[models.Category]mode
 		budgets[models.Category(cat)] = models.Rupees(amt * 100)
 	}
 	return budgets, nil
+}
+
+// ExecuteReadQuery safely executes a read-only SQL query and returns dynamic rows.
+func (s *Store) ExecuteReadQuery(query string, params ...interface{}) ([]map[string]interface{}, error) {
+	// Basic safety check: ensure the query starts with SELECT
+	qUpper := strings.ToUpper(strings.TrimSpace(query))
+	if !strings.HasPrefix(qUpper, "SELECT") {
+		return nil, fmt.Errorf("only SELECT queries are allowed for safety")
+	}
+
+	rows, err := s.db.Query(query, params...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []map[string]interface{}
+
+	for rows.Next() {
+		columnsData := make([]interface{}, len(columns))
+		columnPointers := make([]interface{}, len(columns))
+		for i := range columnsData {
+			columnPointers[i] = &columnsData[i]
+		}
+
+		if err := rows.Scan(columnPointers...); err != nil {
+			return nil, err
+		}
+
+		rowData := make(map[string]interface{})
+		for i, colName := range columns {
+			val := columnPointers[i].(*interface{})
+			if b, ok := (*val).([]byte); ok {
+				rowData[colName] = string(b)
+			} else {
+				rowData[colName] = *val
+			}
+		}
+		result = append(result, rowData)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
