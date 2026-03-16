@@ -27,6 +27,7 @@ const (
 	ViewTransactions
 	ViewAddForm
 	ViewReports
+	ViewAsk
 )
 
 const (
@@ -66,6 +67,10 @@ type Model struct {
 	formMessage string
 
 	dashData models.DashboardData
+
+	askInput  textinput.Model
+	askAnswer string
+	isAsking  bool
 }
 
 func NewModel(store *db.Store, config *utils.Config) Model {
@@ -133,6 +138,12 @@ func NewModel(store *db.Store, config *utils.Config) Model {
 
 	authUser.Focus()
 
+	askIn := textinput.New()
+	askIn.Placeholder = "Ask a question..."
+	askIn.CharLimit = 255
+	askIn.Width = 60
+	askIn.Prompt = "🤖 ? "
+
 	return Model{
 		store:  store,
 		config: config,
@@ -150,10 +161,12 @@ func NewModel(store *db.Store, config *utils.Config) Model {
 			"Transactions",
 			"Add Transaction",
 			"Reports",
+			"Ask AI",
 			"Exit",
 		},
 		inputs:     inputs,
 		focusIndex: 0,
+		askInput:   askIn,
 	}
 }
 
@@ -196,6 +209,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.view == ViewAddForm {
 		return m.updateForm(msg)
+	}
+	if m.view == ViewAsk {
+		return m.updateAsk(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -248,6 +264,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "4":
 			m.view = ViewReports
 			m.cursor = 0
+		case "5":
+			m.view = ViewAsk
+			m.askInput.Focus()
+			m.askAnswer = ""
+			m.isAsking = false
 		}
 	}
 
@@ -579,6 +600,75 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) updateAsk(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+		case "esc":
+			m.view = ViewDashboard
+			m.cursor = 0
+			return m, nil
+		case "enter":
+			if m.isAsking {
+				return m, nil
+			}
+			query := strings.TrimSpace(m.askInput.Value())
+			if query == "" {
+				return m, nil
+			}
+			
+			m.isAsking = true
+			m.askAnswer = "Thinking... ⏳"
+			
+			// Capture variables for the async command
+			store := m.store
+			userID := m.currentUser.ID
+			
+			return m, func() tea.Msg {
+				sqlQuery, err := services.GenerateSQL(query, userID)
+				if err != nil {
+					return errMsg{fmt.Errorf("LLM Error: %w", err)}
+				}
+				
+				results, err := store.ExecuteReadQuery(sqlQuery)
+				if err != nil {
+					return errMsg{fmt.Errorf("DB Error: %w", err)}
+				}
+				
+				summary, err := services.SummarizeData(query, results)
+				if err != nil {
+					return errMsg{fmt.Errorf("Summarize Error: %w", err)}
+				}
+				
+				return askResponseMsg{answer: summary}
+			}
+		}
+	case askResponseMsg:
+		m.isAsking = false
+		m.askAnswer = msg.answer
+		return m, nil
+	case errMsg:
+		m.isAsking = false
+		m.askAnswer = fmt.Sprintf("Error: %v", msg.err)
+		return m, nil
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.askInput, cmd = m.askInput.Update(msg)
+	return m, cmd
+}
+
+type askResponseMsg struct {
+	answer string
+}
+
 func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 	if m.view == ViewDashboard {
 		switch m.cursor {
@@ -595,6 +685,11 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.view = ViewReports
 			m.cursor = 0
 		case 4:
+			m.view = ViewAsk
+			m.askInput.Focus()
+			m.askAnswer = ""
+			m.isAsking = false
+		case 5:
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -636,6 +731,8 @@ func (m Model) View() string {
 		sb.WriteString(m.renderAddForm())
 	case ViewReports:
 		sb.WriteString(m.renderReports())
+	case ViewAsk:
+		sb.WriteString(m.renderAsk())
 	}
 
 	sb.WriteString("\n")
@@ -731,6 +828,27 @@ func (m Model) renderAddForm() string {
 	if m.formMessage != "" {
 		sb.WriteString("\n")
 		sb.WriteString(WarningStyle.Render("  " + m.formMessage))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func (m Model) renderAsk() string {
+	var sb strings.Builder
+
+	sb.WriteString(HeaderStyle.Render("  🤖 Ask AI"))
+	sb.WriteString("\n\n")
+
+	sb.WriteString("  " + MutedStyle.Render("Query your finances using natural language (e.g., 'What did I spend the most on last month?')"))
+	sb.WriteString("\n\n")
+
+	sb.WriteString("  " + m.askInput.View())
+	sb.WriteString("\n\n")
+
+	if m.askAnswer != "" {
+		ansBox := BoxStyle.Width(m.width - 10).Render(m.askAnswer)
+		sb.WriteString(ansBox)
 		sb.WriteString("\n")
 	}
 
