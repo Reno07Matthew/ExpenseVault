@@ -1,0 +1,50 @@
+flowchart LR
+    subgraph Producer
+        SUBMIT["Submit Jobs"]
+    end
+
+    subgraph JobChannel
+        JC["chan Job"]
+    end
+
+    subgraph Workers["Workers - Fan-out"]
+        W1["Worker 0"]
+        W2["Worker 1"]
+        W3["Worker 2"]
+        W4["Worker N"]
+    end
+
+    subgraph ResultChannel
+        RC["chan Result"]
+    end
+
+    subgraph Consumer["Consumer - Fan-in"]
+        COLLECT["Collect Results"]
+    end
+
+    subgraph Control
+        CTX["context.Context - Graceful Shutdown"]
+    end
+
+    SUBMIT --> JC
+    JC --> W1
+    JC --> W2
+    JC --> W3
+    JC --> W4
+    W1 --> RC
+    W2 --> RC
+    W3 --> RC
+    W4 --> RC
+    RC --> COLLECT
+    CTX -.->|cancel| W1
+    CTX -.->|cancel| W2
+    CTX -.->|cancel| W3
+    CTX -.->|cancel| W4
+
+    style SUBMIT fill:#3498db,color:#fff
+    style COLLECT fill:#2ecc71,color:#fff
+    style CTX fill:#e74c3c,color:#fff
+    style W1 fill:#9b59b6,color:#fff
+    style W2 fill:#9b59b6,color:#fff
+    style W3 fill:#9b59b6,color:#fff
+    style W4 fill:#9b59b6,color:#fff

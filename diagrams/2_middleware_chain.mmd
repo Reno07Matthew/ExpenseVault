@@ -1,0 +1,28 @@
+sequenceDiagram
+    participant C as Client
+    participant L as LoggingMiddleware
+    participant R as RateLimiter
+    participant J as JWTAuth
+    participant H as Handler
+    participant DB as Database
+
+    C->>L: POST /sync
+    L->>L: Record start time
+    L->>R: Forward request
+    R->>R: Check token bucket for IP
+    alt Rate limit exceeded
+        R-->>C: 429 Too Many Requests
+    else Allowed
+        R->>J: Forward request
+        J->>J: Parse Bearer token
+        alt Invalid or Missing JWT
+            J-->>C: 401 Unauthorized
+        else Valid JWT
+            J->>J: Inject user into context
+            J->>H: Forward request
+            H->>DB: Execute query
+            DB-->>H: Results
+            H-->>C: 200 OK + JSON
+        end
+    end
+    L->>L: Log method, path, status, latency

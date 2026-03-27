@@ -25,3 +25,14 @@ The TUI starts with signup and login screens. After login you can access the das
 ./expensevault list
 ./expensevault report --type monthly
 ```
+
+## Supabase (PostgreSQL)
+
+To use Supabase, set the following environment variables (or use a `.env` file):
+
+```bash
+export DB_TYPE=supabase
+export SUPABASE_DSN="postgresql://postgres:[PASSWORD]@db.[PROJECT-ID].supabase.co:5432/postgres"
+```
+
+Then run the application as usual.

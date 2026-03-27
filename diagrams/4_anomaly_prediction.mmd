@@ -1,0 +1,29 @@
+flowchart TD
+    TX["All Transactions"] --> GROUP["Group by Category"]
+    GROUP --> STATS["Calculate Mean and Std Dev per Category"]
+    STATS --> ZSCORE["Compute Z-Score for Each Transaction"]
+    ZSCORE --> FLAG{"Z-Score > 2 sigma?"}
+    FLAG -->|Yes| ALERT["AnomalyAlert with Message and Severity"]
+    FLAG -->|No| SAFE["Normal"]
+    ALERT --> SORT["Sort by Severity - Highest First"]
+    SORT --> DASH["Dashboard Display - Top 3 Alerts"]
+
+    TX --> TREND["Split Older vs Recent - Compare Averages"]
+    TREND --> TDIR{"Change exceeds 15 percent?"}
+    TDIR -->|Up| UP["Spending UP"]
+    TDIR -->|Down| DOWN["Spending DOWN"]
+    TDIR -->|Stable| STABLE["Stable"]
+
+    TX --> BURN["Daily Burn Rate"]
+    BURN --> PROJECT["Projected Expenses"]
+    PROJECT --> SAVINGS["Projected Savings"]
+    SAVINGS --> CONF{"Data Points?"}
+    CONF -->|"15+ txns, 15+ days"| HIGH["High Confidence"]
+    CONF -->|"7+ txns, 7+ days"| MED["Medium Confidence"]
+    CONF -->|"Less than 7"| LOW["Low Confidence"]
+
+    style ALERT fill:#e74c3c,color:#fff
+    style HIGH fill:#27ae60,color:#fff
+    style MED fill:#f39c12,color:#fff
+    style LOW fill:#e74c3c,color:#fff
+    style DASH fill:#9b59b6,color:#fff

@@ -33,6 +33,11 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed to connect to MySQL: %w", err)
 			}
+		} else if cfg.DBType == "supabase" || cfg.DBType == "postgres" {
+			store, err = db.NewSupabaseStore(cfg.SupabaseDSN)
+			if err != nil {
+				return fmt.Errorf("failed to connect to Supabase/PostgreSQL: %w", err)
+			}
 		} else {
 			store, err = db.NewStore(cfg.SQLitePath)
 			if err != nil {

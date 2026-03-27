@@ -18,8 +18,9 @@ import (
 // Store manages all database operations.
 // UNIT 2: Struct — groups related fields.
 type Store struct {
-	db      *sql.DB
-	isMySQL bool
+	db         *sql.DB
+	isMySQL    bool
+	isPostgres bool
 }
 
 // NewStore opens/creates the SQLite database and initializes tables.
@@ -128,9 +129,22 @@ func (s *Store) AddTransaction(t *models.Transaction) (int64, error) {
 		return 0, err
 	}
 
+	query := `INSERT INTO transactions (user_id, type, amount, category, description, date, notes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`
+	
+	if s.isPostgres {
+		var lastInsertID int64
+		err := s.db.QueryRow(s.rebind(query+" RETURNING id"),
+			t.UserID, t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes,
+		).Scan(&lastInsertID)
+		if err != nil {
+			return 0, &models.DatabaseError{Operation: "insert", Err: err}
+		}
+		return lastInsertID, nil
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO transactions (user_id, type, amount, category, description, date, notes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(query),
 		t.UserID, t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes,
 	)
 	if err != nil {
@@ -142,11 +156,9 @@ func (s *Store) AddTransaction(t *models.Transaction) (int64, error) {
 // GetTransaction retrieves a transaction by ID.
 // UNIT 4: Returns *Transaction (pointer).
 func (s *Store) GetTransaction(id int) (*models.Transaction, error) {
-	row := s.db.QueryRow(
-		`SELECT id, user_id, type, amount, category, description, date, notes, created_at, updated_at
-		 FROM transactions WHERE id = ?`,
-		id,
-	)
+	query := `SELECT id, user_id, type, amount, category, description, date, notes, created_at, updated_at
+		 FROM transactions WHERE id = ?`
+	row := s.db.QueryRow(s.rebind(query), id)
 
 	// UNIT 1: var keyword — t starts with zero values.
 	var t models.Transaction
@@ -196,7 +208,7 @@ func (s *Store) ListTransactions(userID int64, txType, category, startDate, endD
 	}
 
 	// UNIT 3: Unfurling a slice — args... spreads the slice into variadic Query().
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.Query(s.rebind(query), args...)
 	if err != nil {
 		return nil, &models.DatabaseError{Operation: "list", Err: err}
 	}
@@ -223,8 +235,9 @@ func (s *Store) UpdateTransaction(t *models.Transaction) error {
 		return err
 	}
 
+	query := `UPDATE transactions SET type = ?, amount = ?, category = ?, description = ?, date = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`
 	_, err := s.db.Exec(
-		`UPDATE transactions SET type = ?, amount = ?, category = ?, description = ?, date = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
+		s.rebind(query),
 		t.Type, t.Amount.ToFloat64(), t.Category, t.Description, t.Date, t.Notes, t.ID, t.UserID,
 	)
 	if err != nil {
@@ -235,7 +248,8 @@ func (s *Store) UpdateTransaction(t *models.Transaction) error {
 
 // DeleteTransaction deletes a transaction by ID and user ID.
 func (s *Store) DeleteTransaction(id int, userID int64) error {
-	_, err := s.db.Exec("DELETE FROM transactions WHERE id = ? AND user_id = ?", id, userID)
+	query := "DELETE FROM transactions WHERE id = ? AND user_id = ?"
+	_, err := s.db.Exec(s.rebind(query), id, userID)
 	if err != nil {
 		return &models.DatabaseError{Operation: "delete", Err: err}
 	}
@@ -275,10 +289,18 @@ func (s *Store) BulkInsert(transactions []models.Transaction) (count int, err er
 
 // CreateUser creates a new user.
 func (s *Store) CreateUser(username, passwordHash string) (int64, error) {
-	result, err := s.db.Exec(
-		"INSERT INTO users (username, password_hash) VALUES (?, ?)",
-		username, passwordHash,
-	)
+	query := "INSERT INTO users (username, password_hash) VALUES (?, ?)"
+	
+	if s.isPostgres {
+		var lastInsertID int64
+		err := s.db.QueryRow(s.rebind(query+" RETURNING id"), username, passwordHash).Scan(&lastInsertID)
+		if err != nil {
+			return 0, &models.DatabaseError{Operation: "create_user", Err: err}
+		}
+		return lastInsertID, nil
+	}
+
+	result, err := s.db.Exec(s.rebind(query), username, passwordHash)
 	if err != nil {
 		return 0, &models.DatabaseError{Operation: "create_user", Err: err}
 	}
@@ -288,10 +310,8 @@ func (s *Store) CreateUser(username, passwordHash string) (int64, error) {
 // GetUserByUsername retrieves a user by username.
 // UNIT 4: Returns *models.User (pointer).
 func (s *Store) GetUserByUsername(username string) (*models.User, error) {
-	row := s.db.QueryRow(
-		"SELECT id, username, password_hash, created_at, COALESCE(last_login, created_at) FROM users WHERE username = ?",
-		username,
-	)
+	query := "SELECT id, username, password_hash, created_at, COALESCE(last_login, created_at) FROM users WHERE username = ?"
+	row := s.db.QueryRow(s.rebind(query), username)
 	var u models.User
 	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt, &u.LastLogin); err != nil {
 		if err == sql.ErrNoRows {
@@ -304,10 +324,8 @@ func (s *Store) GetUserByUsername(username string) (*models.User, error) {
 
 // UpdateLastLogin updates the last_login timestamp for a user.
 func (s *Store) UpdateLastLogin(userID int64) error {
-	_, err := s.db.Exec(
-		"UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
-		userID,
-	)
+	query := "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?"
+	_, err := s.db.Exec(s.rebind(query), userID)
 	if err != nil {
 		return &models.DatabaseError{Operation: "update_last_login", Err: err}
 	}
@@ -326,7 +344,7 @@ func (s *Store) SetBudget(userID int64, category models.Category, amount models.
 				 ON CONFLICT(user_id, category, month) DO UPDATE SET amount = excluded.amount`
 	}
 
-	_, err := s.db.Exec(query, userID, category, amount.ToFloat64(), month)
+	_, err := s.db.Exec(s.rebind(query), userID, category, amount.ToFloat64(), month)
 	if err != nil {
 		return &models.DatabaseError{Operation: "set_budget", Err: err}
 	}
@@ -335,7 +353,8 @@ func (s *Store) SetBudget(userID int64, category models.Category, amount models.
 
 // GetBudgets retrieves all budgets for a specific user and month.
 func (s *Store) GetBudgets(userID int64, month string) (map[models.Category]models.Rupees, error) {
-	rows, err := s.db.Query("SELECT category, amount FROM budgets WHERE user_id = ? AND month = ?", userID, month)
+	query := "SELECT category, amount FROM budgets WHERE user_id = ? AND month = ?"
+	rows, err := s.db.Query(s.rebind(query), userID, month)
 	if err != nil {
 		return nil, &models.DatabaseError{Operation: "get_budgets", Err: err}
 	}
@@ -361,7 +380,7 @@ func (s *Store) ExecuteReadQuery(query string, params ...interface{}) ([]map[str
 		return nil, fmt.Errorf("only SELECT queries are allowed for safety")
 	}
 
-	rows, err := s.db.Query(query, params...)
+	rows, err := s.db.Query(s.rebind(query), params...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
@@ -402,4 +421,25 @@ func (s *Store) ExecuteReadQuery(query string, params ...interface{}) ([]map[str
 	}
 
 	return result, nil
+}
+
+func (s *Store) rebind(query string) string {
+	if !s.isPostgres {
+		return query
+	}
+
+	var sb strings.Builder
+	paramIdx := 1
+	for {
+		idx := strings.Index(query, "?")
+		if idx == -1 {
+			sb.WriteString(query)
+			break
+		}
+		sb.WriteString(query[:idx])
+		fmt.Fprintf(&sb, "$%d", paramIdx)
+		paramIdx++
+		query = query[idx+1:]
+	}
+	return sb.String()
 }

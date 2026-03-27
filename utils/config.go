@@ -19,6 +19,7 @@ type Config struct {
 	MySQLUser     string
 	MySQLPassword string
 	MySQLDatabase string
+	SupabaseDSN   string
 	JWTSecret     string
 	ServerPort    int
 }
@@ -52,6 +53,8 @@ func LoadConfig() (*Config, error) {
 	} else {
 		config.MySQLDSN = mysqlDSN
 	}
+
+	config.SupabaseDSN = getEnv("SUPABASE_DSN", "")
 
 	return config, nil
 }

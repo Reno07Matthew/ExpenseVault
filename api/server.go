@@ -3,21 +3,33 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"expenseVault/models"
 )
 
-// StartServer starts a simple HTTP server.
+// StartServer starts a simple HTTP server with middleware.
 func StartServer(addr string) error {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	// JWT secret for auth middleware.
+	jwtSecret := []byte("your-secret-key-change-in-production")
+
+	// Rate limiter: 10 requests per second, burst of 20.
+	limiter := NewRateLimiter(10, 20, time.Second)
+
+	// /health — public (logging only)
+	mux.Handle("/health", LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
+	})))
 
-	mux.HandleFunc("/sync", handleSync)
+	// /sync — protected (logging + rate limit + JWT auth)
+	syncHandler := JWTAuthMiddleware(jwtSecret)(http.HandlerFunc(handleSync))
+	syncHandler = RateLimitMiddleware(limiter)(syncHandler)
+	mux.Handle("/sync", LoggingMiddleware(syncHandler))
 
+	Logger.Info("Server starting", "addr", addr)
 	return http.ListenAndServe(addr, mux)
 }
 

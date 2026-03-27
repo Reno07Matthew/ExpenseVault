@@ -68,6 +68,16 @@ type Model struct {
 
 	dashData models.DashboardData
 
+	anomalyAlerts []services.AnomalyAlert
+	spendingTrend string
+	prediction    string
+
+	searchInput textinput.Model
+	searchMode  bool   // true when / search is active
+	queryMode   bool   // true when : CQL query is active
+	searchQuery string
+	filteredTxs []models.Transaction
+
 	askInput  textinput.Model
 	askAnswer string
 	isAsking  bool
@@ -144,6 +154,12 @@ func NewModel(store *db.Store, config *utils.Config) Model {
 	askIn.Width = 60
 	askIn.Prompt = "🤖 ? "
 
+	searchIn := textinput.New()
+	searchIn.Placeholder = "Search transactions..."
+	searchIn.CharLimit = 100
+	searchIn.Width = 50
+	searchIn.Prompt = "🔍 "
+
 	return Model{
 		store:  store,
 		config: config,
@@ -164,9 +180,10 @@ func NewModel(store *db.Store, config *utils.Config) Model {
 			"Ask AI",
 			"Exit",
 		},
-		inputs:     inputs,
-		focusIndex: 0,
-		askInput:   askIn,
+		inputs:      inputs,
+		focusIndex:  0,
+		askInput:    askIn,
+		searchInput: searchIn,
 	}
 }
 
@@ -176,7 +193,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) loadTransactions() tea.Msg {
 	if m.currentUser == nil {
-		return txsLoadedMsg{[]models.Transaction{}, models.DashboardData{}}
+		return txsLoadedMsg{[]models.Transaction{}, models.DashboardData{}, nil, "", ""}
 	}
 	txs, err := m.store.GetAllTransactions(m.currentUser.ID)
 	if err != nil {
@@ -191,12 +208,22 @@ func (m Model) loadTransactions() tea.Msg {
 	}
 
 	dashData := services.CalculateDashboardData(txs, budgets)
-	return txsLoadedMsg{txs, dashData}
+	anomalies := services.DetectAnomalies(txs)
+	trend := services.GetSpendingTrend(txs)
+
+	// Predictive budgeting.
+	pred := services.PredictEndOfMonth(txs, dashData.MonthlyIncome.ToFloat64())
+	predStr := services.FormatPrediction(pred)
+
+	return txsLoadedMsg{txs, dashData, anomalies, trend, predStr}
 }
 
 type txsLoadedMsg struct {
-	transactions []models.Transaction
-	dashData     models.DashboardData
+	transactions  []models.Transaction
+	dashData      models.DashboardData
+	anomalyAlerts []services.AnomalyAlert
+	spendingTrend string
+	prediction    string
 }
 type errMsg struct{ err error }
 type txAddedMsg struct{ id int64 }
@@ -222,6 +249,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case txsLoadedMsg:
 		m.transactions = msg.transactions
 		m.dashData = msg.dashData
+		m.anomalyAlerts = msg.anomalyAlerts
+		m.spendingTrend = msg.spendingTrend
+		m.prediction = msg.prediction
 		m.message = ""
 		return m, nil
 	case txAddedMsg:
@@ -269,7 +299,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.askInput.Focus()
 			m.askAnswer = ""
 			m.isAsking = false
+		case "/":
+			if !m.searchMode && !m.queryMode {
+				m.searchMode = true
+				m.searchInput.SetValue("")
+				m.searchInput.Focus()
+				return m, nil
+			}
+		case ":":
+			if !m.searchMode && !m.queryMode {
+				m.queryMode = true
+				m.searchInput.SetValue("")
+				m.searchInput.Prompt = "🔎 "
+				m.searchInput.Placeholder = "cat:food amt:>500 date:last-week"
+				m.searchInput.Focus()
+				return m, nil
+			}
+		case "esc":
+			if m.searchMode || m.queryMode {
+				m.searchMode = false
+				m.queryMode = false
+				m.searchQuery = ""
+				m.filteredTxs = nil
+				m.searchInput.Blur()
+				m.searchInput.Prompt = "🔍 "
+				m.searchInput.Placeholder = "Search transactions..."
+				return m, nil
+			}
+			m.view = ViewDashboard
+			m.cursor = 0
+			return m, nil
 		}
+	}
+
+	// Handle search input updates.
+	if m.searchMode || m.queryMode {
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		// Live-filter on every keystroke.
+		query := m.searchInput.Value()
+		if query != "" {
+			if m.queryMode {
+				filter := services.ParseQuery(query)
+				m.filteredTxs = services.ApplyQueryFilter(m.transactions, filter)
+			} else {
+				// Simple fuzzy search.
+				filter := services.QueryFilter{FuzzyText: query}
+				m.filteredTxs = services.ApplyQueryFilter(m.transactions, filter)
+			}
+			m.searchQuery = query
+		} else {
+			m.filteredTxs = nil
+			m.searchQuery = ""
+		}
+		return m, cmd
 	}
 
 	return m, nil
@@ -706,53 +789,136 @@ func (m Model) View() string {
 
 	dbInfo := ""
 	if m.config != nil {
-		if m.config.DBType == "mysql" {
+		if m.config.DBType == "supabase" || m.config.DBType == "postgres" {
+			dbInfo = "[Supabase]"
+		} else if m.config.DBType == "mysql" {
 			dbInfo = fmt.Sprintf("[MySQL %s:%d/%s]", m.config.MySQLHost, m.config.MySQLPort, m.config.MySQLDatabase)
 		} else {
 			dbInfo = "[SQLite]"
 		}
 	}
 
+	// Auth views render fullscreen (no sidebar).
+	if m.view == ViewAuthMenu || m.view == ViewSignup || m.view == ViewLogin {
+		sb.WriteString(TitleStyle.Render("ExpenseVault " + dbInfo))
+		sb.WriteString("\n\n")
+
+		switch m.view {
+		case ViewAuthMenu:
+			sb.WriteString(m.renderAuthMenu())
+		case ViewSignup:
+			sb.WriteString(m.renderAuthForm("Sign up", true))
+		case ViewLogin:
+			sb.WriteString(m.renderAuthForm("Log in", false))
+		}
+
+		sb.WriteString("\n")
+		if m.view == ViewAuthMenu {
+			sb.WriteString(HelpStyle.Render("[Enter] Select  [Up/Down] Move  [q] Quit"))
+		} else {
+			sb.WriteString(HelpStyle.Render("[Tab] Next field  [Shift+Tab] Prev field  [Enter] Submit  [Esc] Back"))
+		}
+
+		if m.message != "" {
+			sb.WriteString("\n")
+			sb.WriteString(WarningStyle.Render(m.message))
+		}
+		return sb.String()
+	}
+
+	// ── Pane-Based Layout for Post-Login Views ──
 	sb.WriteString(TitleStyle.Render("ExpenseVault " + dbInfo))
+	if m.currentUser != nil {
+		sb.WriteString(MutedStyle.Render("  👤 " + m.currentUser.Username))
+	}
 	sb.WriteString("\n\n")
 
+	// Build sidebar
+	sidebar := m.renderSidebar()
+
+	// Build main content
+	var mainContent string
 	switch m.view {
-	case ViewAuthMenu:
-		sb.WriteString(m.renderAuthMenu())
-	case ViewSignup:
-		sb.WriteString(m.renderAuthForm("Sign up", true))
-	case ViewLogin:
-		sb.WriteString(m.renderAuthForm("Log in", false))
 	case ViewDashboard:
-		sb.WriteString(m.renderDashboard())
+		mainContent = m.renderDashboard()
 	case ViewTransactions:
-		sb.WriteString(m.renderTransactions())
+		mainContent = m.renderTransactions()
 	case ViewAddForm:
-		sb.WriteString(m.renderAddForm())
+		mainContent = m.renderAddForm()
 	case ViewReports:
-		sb.WriteString(m.renderReports())
+		mainContent = m.renderReports()
 	case ViewAsk:
-		sb.WriteString(m.renderAsk())
+		mainContent = m.renderAsk()
 	}
 
-	sb.WriteString("\n")
-	if m.view == ViewAddForm {
-		sb.WriteString(HelpStyle.Render("[Tab] Next field  [Shift+Tab] Prev field  [Ctrl+S] Save  [Esc] Back"))
-	} else if m.view == ViewAuthMenu {
-		sb.WriteString(HelpStyle.Render("[Enter] Select  [Up/Down] Move  [q] Quit"))
-	} else if m.view == ViewSignup || m.view == ViewLogin {
-		sb.WriteString(HelpStyle.Render("[Tab] Next field  [Shift+Tab] Prev field  [Enter] Submit  [Esc] Back"))
-	} else {
-		sb.WriteString(HelpStyle.Render("[1]Dashboard [2]Transactions [3]Add [4]Reports [q]Quit"))
+	mainWidth := m.width - 28
+	if mainWidth < 40 {
+		mainWidth = 40
 	}
+	mainPane := MainPaneStyle.Width(mainWidth).Render(mainContent)
+
+	// Join sidebar + main horizontally
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainPane))
 	sb.WriteString("\n")
+
+	// Status bar
+	sb.WriteString(m.renderStatusBar())
 
 	if m.message != "" {
+		sb.WriteString("\n")
 		sb.WriteString(WarningStyle.Render(m.message))
 		sb.WriteString("\n")
 	}
 
 	return sb.String()
+}
+
+// renderSidebar renders the fixed left navigation pane.
+func (m Model) renderSidebar() string {
+	var sb strings.Builder
+
+	sb.WriteString(HeaderStyle.Render("📂 NAVIGATION"))
+	sb.WriteString("\n\n")
+
+	icons := []string{"📊", "📋", "➕", "📈", "🤖", "🚪"}
+
+	for i, item := range m.menuItems {
+		label := fmt.Sprintf(" %s %s", icons[i], item)
+		if m.view == ViewDashboard+View(i) {
+			sb.WriteString(SidebarActiveStyle.Render(label))
+		} else {
+			sb.WriteString(SidebarInactiveStyle.Render(label))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(MutedStyle.Render("─────────────────"))
+	sb.WriteString("\n\n")
+
+	// Quick stats
+	if m.currentUser != nil && len(m.transactions) > 0 {
+		sb.WriteString(MutedStyle.Render(fmt.Sprintf(" 📝 %d txns", len(m.transactions))))
+		sb.WriteString("\n")
+	}
+
+	return SidebarStyle.Render(sb.String())
+}
+
+// renderStatusBar renders the bottom bar with hotkeys & search.
+func (m Model) renderStatusBar() string {
+	if m.searchMode || m.queryMode {
+		mode := "SEARCH"
+		if m.queryMode {
+			mode = "QUERY"
+		}
+		modeTag := StatusBarStyle.Render(fmt.Sprintf(" %s ", mode))
+		searchView := SearchBarStyle.Width(m.width - 15).Render(m.searchInput.View())
+		return lipgloss.JoinHorizontal(lipgloss.Center, modeTag, searchView)
+	}
+
+	hotkeys := " [1]Dash [2]Txns [3]Add [4]Reports [5]AI  [/]Search [:]Query [q]Quit "
+	return StatusBarStyle.Width(m.width).Render(hotkeys)
 }
 
 func (m Model) renderAuthMenu() string {
@@ -936,16 +1102,32 @@ func (m Model) renderDashboard() string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString(HeaderStyle.Render("  📌 Menu"))
-	sb.WriteString("\n\n")
-
-	// Menu items with cursor
-	for i, item := range m.menuItems {
-		if i == m.cursor {
-			sb.WriteString(SelectedMenuStyle.Render("▸ " + item))
-		} else {
-			sb.WriteString(MenuItemStyle.Render("  " + item))
+	// Anomaly Alerts
+	if len(m.anomalyAlerts) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString(HeaderStyle.Render("  🔍 Anomaly Detection"))
+		sb.WriteString("\n\n")
+		maxAlerts := 3
+		if len(m.anomalyAlerts) < maxAlerts {
+			maxAlerts = len(m.anomalyAlerts)
 		}
+		for _, alert := range m.anomalyAlerts[:maxAlerts] {
+			sb.WriteString(WarningStyle.Render("  " + alert.Message))
+			sb.WriteString("\n")
+		}
+	}
+
+	// Spending Trend
+	if m.spendingTrend != "" {
+		sb.WriteString("\n")
+		sb.WriteString(BoxStyle.Render(m.spendingTrend))
+		sb.WriteString("\n")
+	}
+
+	// Predictive Budgeting
+	if m.prediction != "" {
+		sb.WriteString("\n")
+		sb.WriteString(PredictionBoxStyle.Render("🔮 " + m.prediction))
 		sb.WriteString("\n")
 	}
 
@@ -986,10 +1168,17 @@ func (m Model) renderProgressBar(label string, percent float64, width int) strin
 func (m Model) renderTransactions() string {
 	var sb strings.Builder
 
-	sb.WriteString(HeaderStyle.Render("  📋 All Transactions"))
+	// Determine which transactions to show.
+	txs := m.transactions
+	if m.filteredTxs != nil {
+		txs = m.filteredTxs
+		sb.WriteString(HeaderStyle.Render(fmt.Sprintf("  📋 Filtered: %d results", len(txs))))
+	} else {
+		sb.WriteString(HeaderStyle.Render("  📋 All Transactions"))
+	}
 	sb.WriteString("\n\n")
 
-	if len(m.transactions) == 0 {
+	if len(txs) == 0 {
 		sb.WriteString(MutedStyle.Render("  No transactions found."))
 		sb.WriteString("\n")
 		return sb.String()
@@ -1001,20 +1190,19 @@ func (m Model) renderTransactions() string {
 	))
 	sb.WriteString("\n")
 
-	displayCount := len(m.transactions)
+	displayCount := len(txs)
 	if displayCount > 20 {
 		displayCount = 20
 	}
 
 	for i := 0; i < displayCount; i++ {
-		tx := m.transactions[i]
+		tx := txs[i]
 		style := TableRowStyle
 		if i == m.cursor {
 			style = style.Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
 		}
 
 		symbol := "💰"
-		// LAB 4: Value receiver IsExpense() — read-only check.
 		if tx.IsExpense() {
 			symbol = "💸"
 		}
@@ -1025,8 +1213,8 @@ func (m Model) renderTransactions() string {
 		sb.WriteString("\n")
 	}
 
-	if len(m.transactions) > 20 {
-		sb.WriteString(MutedStyle.Render(fmt.Sprintf("\n  ... and %d more transactions", len(m.transactions)-20)))
+	if len(txs) > 20 {
+		sb.WriteString(MutedStyle.Render(fmt.Sprintf("\n  ... and %d more transactions", len(txs)-20)))
 		sb.WriteString("\n")
 	}
 

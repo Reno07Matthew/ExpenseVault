@@ -1,0 +1,82 @@
+flowchart TB
+    subgraph UI["User Interface Layer"]
+        CLI["CLI Commands - Cobra Framework"]
+        TUI["TUI Dashboard - Bubble Tea + Lipgloss"]
+        API["HTTP API Server - net/http"]
+    end
+
+    subgraph MW["Middleware Chain"]
+        MW1["Structured Logger - slog JSON"]
+        MW2["Rate Limiter - Token Bucket"]
+        MW3["JWT Auth - Bearer Validation"]
+    end
+
+    subgraph SVC["Service Layer"]
+        AUTH["Auth Service - bcrypt"]
+        INSIGHTS["Insights Engine"]
+        ANOMALY["Anomaly Detection - Z-Score"]
+        PREDICT["Predictive Engine - EOM Forecast"]
+        REPORTS["Report Generator"]
+        LLM["LLM Service - Gemini API"]
+        SCHED["Scheduler - Recurring Txns"]
+        POOL["Worker Pool - Fan-out/Fan-in"]
+        CQL["Query Parser - CQL + Fuzzy"]
+        CRYPTO["Crypto Service - AES-256-GCM"]
+    end
+
+    subgraph DATA["Data Layer"]
+        STORE["Unified Store - db.Store"]
+        EXPORT["Export Engine - CSV / JSON"]
+    end
+
+    subgraph DBS["Database Backends"]
+        SQLITE[("SQLite")]
+        MYSQL[("MySQL")]
+        SUPA[("Supabase PostgreSQL")]
+    end
+
+    subgraph EXT["External Services"]
+        GEMINI["Google Gemini API"]
+    end
+
+    CLI --> AUTH
+    CLI --> STORE
+    CLI --> REPORTS
+    CLI --> EXPORT
+    CLI --> CRYPTO
+    CLI --> LLM
+
+    TUI --> AUTH
+    TUI --> STORE
+    TUI --> INSIGHTS
+    TUI --> ANOMALY
+    TUI --> PREDICT
+    TUI --> REPORTS
+    TUI --> CQL
+    TUI --> LLM
+
+    API --> MW1 --> MW2 --> MW3
+    MW3 --> STORE
+
+    SCHED --> STORE
+    POOL --> REPORTS
+
+    LLM --> GEMINI
+
+    STORE --> SQLITE
+    STORE --> MYSQL
+    STORE --> SUPA
+
+    EXPORT --> STORE
+    CRYPTO --> EXPORT
+
+    style CLI fill:#4a9eff,color:#fff
+    style TUI fill:#9b59b6,color:#fff
+    style API fill:#2ecc71,color:#fff
+    style SQLITE fill:#3498db,color:#fff
+    style MYSQL fill:#e67e22,color:#fff
+    style SUPA fill:#27ae60,color:#fff
+    style GEMINI fill:#ea4335,color:#fff
+    style MW1 fill:#1abc9c,color:#fff
+    style MW2 fill:#f39c12,color:#fff
+    style MW3 fill:#e74c3c,color:#fff
