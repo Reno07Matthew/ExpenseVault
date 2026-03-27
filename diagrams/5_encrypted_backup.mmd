@@ -1,0 +1,23 @@
+flowchart LR
+    subgraph Backup["Backup with --encrypt"]
+        B1["Fetch All Transactions"] --> B2["Serialize to JSON"]
+        B2 --> B3["Prompt Password"]
+        B3 --> B4["Generate Random Salt"]
+        B4 --> B5["Derive Key via scrypt"]
+        B5 --> B6["AES-256-GCM Encrypt"]
+        B6 --> B7["Save salt + nonce + ciphertext"]
+    end
+
+    subgraph Restore["Restore with --decrypt"]
+        R1["Read Encrypted File"] --> R2["Prompt Password"]
+        R2 --> R3["Extract Salt from Header"]
+        R3 --> R4["Derive Key via scrypt"]
+        R4 --> R5["AES-256-GCM Decrypt"]
+        R5 --> R6["Parse JSON"]
+        R6 --> R7["BulkInsert to Database"]
+    end
+
+    style B6 fill:#e74c3c,color:#fff
+    style R5 fill:#27ae60,color:#fff
+    style B7 fill:#3498db,color:#fff
+    style R7 fill:#3498db,color:#fff

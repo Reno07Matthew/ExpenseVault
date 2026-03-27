@@ -1,0 +1,27 @@
+flowchart TB
+    subgraph Layout["View Function - Master Layout"]
+        TITLE["Title Bar - ExpenseVault + DB Info + Username"]
+
+        subgraph HorizontalJoin["Horizontal Join"]
+            SIDEBAR["Sidebar - Navigation Pane - 22px fixed width"]
+            MAIN["Main Content Pane - Dynamic width"]
+        end
+
+        STATUS["Status Bar - Hotkeys or Search or Query Input"]
+    end
+
+    TITLE --> SIDEBAR
+    TITLE --> MAIN
+    SIDEBAR --> STATUS
+    MAIN --> STATUS
+
+    MAIN --> D["ViewDashboard - KPIs + Bars + Anomalies + Prediction"]
+    MAIN --> T["ViewTransactions - Table + Filtered Results"]
+    MAIN --> A["ViewAddForm - 6-Field Input"]
+    MAIN --> R["ViewReports - Monthly or Category or Yearly"]
+    MAIN --> AI["ViewAsk - AI Query + Response"]
+
+    style SIDEBAR fill:#2c3e50,color:#fff
+    style MAIN fill:#34495e,color:#fff
+    style STATUS fill:#f39c12,color:#000
+    style TITLE fill:#8e44ad,color:#fff
