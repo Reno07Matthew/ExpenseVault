@@ -6,7 +6,7 @@ Built to demonstrate comprehensive coverage of Go programming concepts including
 
 ---
 
-## 🚀 Key Advanced Features
+## Key Advanced Features
 
 ### Intelligence & Analytics
 * **AI Financial Assistant:** Powered by Google Gemini 2.5 Flash, query your finances using natural language (`ask "What did I spend on food last month?"`).
@@ -28,7 +28,7 @@ Built to demonstrate comprehensive coverage of Go programming concepts including
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 ### 1. Configure Environment
 ```bash
@@ -51,7 +51,7 @@ go build -o expensevault .
 
 ---
 
-## ⌨️ TUI Hotkeys
+## TUI Hotkeys
 
 | Key | Action |
 |-----|--------|
@@ -64,7 +64,7 @@ go build -o expensevault .
 
 ---
 
-## 🛠️ CLI Commands
+## CLI Commands
 
 | Command | Description |
 |---------|-------------|
@@ -87,7 +87,7 @@ go build -o expensevault .
 
 ---
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 expenseVault/
@@ -105,7 +105,7 @@ expenseVault/
 
 ---
 
-## 📚 Technical Documentation
+## Technical Documentation
 
 For an in-depth dive into the codebase implementation, see our companion documentation:
 
@@ -115,7 +115,7 @@ For an in-depth dive into the codebase implementation, see our companion documen
 
 ---
 
-## 🧪 Testing and Benchmarks
+## Testing and Benchmarks
 
 The project includes over 60 unit tests and 11 benchmarks.
 
